@@ -1,0 +1,249 @@
+From 012d5e41caa25be844999c4e5833a629540c6090 Mon Sep 17 00:00:00 2001
+From: Arena Agent <agent@arena.ai>
+Date: Thu, 26 Nov 2026 11:56:28 +0000
+Subject: [PATCH 4/6] feat: links de WhatsApp con prefijo InvitaFigus y codigo
+ de operacion
+
+---
+ api/rsvp.js                            |  2 +-
+ src/components/invitation/RSVPForm.jsx | 39 ++++++++++++++++----------
+ src/config/whatsapp.js                 | 37 ++++++++++++++++++++++++
+ src/pages/AdminPage.jsx                |  9 ++----
+ src/pages/CreatePage.jsx               |  4 +--
+ src/pages/HomePage.jsx                 |  4 +--
+ src/pages/InvitationPage.jsx           |  3 +-
+ 7 files changed, 69 insertions(+), 29 deletions(-)
+ create mode 100644 src/config/whatsapp.js
+
+diff --git a/api/rsvp.js b/api/rsvp.js
+index 939795d..d6cdbaf 100644
+--- a/api/rsvp.js
++++ b/api/rsvp.js
+@@ -38,7 +38,7 @@ export default async function handler(req, res) {
+         method: 'POST',
+         body: JSON.stringify({ slug, name, phone, status, guests, notes }),
+       })
+-      return sendJson(res, 201, { ok: true, rsvp: data.rsvp })
++      return sendJson(res, 201, { ok: true, rsvp: data.rsvp, notified: Boolean(data.notified) })
+     }
+ 
+     return sendJson(res, 405, { error: 'Método no permitido' })
+diff --git a/src/components/invitation/RSVPForm.jsx b/src/components/invitation/RSVPForm.jsx
+index f2111a7..63ce1e3 100644
+--- a/src/components/invitation/RSVPForm.jsx
++++ b/src/components/invitation/RSVPForm.jsx
+@@ -1,6 +1,7 @@
+ import { useEffect, useState } from 'react'
+ import { motion } from 'framer-motion'
+ import { Check, X, Plus, Minus, Loader2, MessageCircle, Users } from 'lucide-react'
++import { whatsappLinks } from '../../config/whatsapp'
+ 
+ export default function RSVPForm({ event }) {
+   const [form, setForm] = useState({ name: '', whatsapp: '', status: 'confirmed', guests: 0, notes: '' })
+@@ -8,6 +9,7 @@ export default function RSVPForm({ event }) {
+   const [submitted, setSubmitted] = useState(false)
+   const [error, setError] = useState('')
+   const [count, setCount] = useState({ total: 0, confirmed: 0, guests: 0 })
++  const [notified, setNotified] = useState(false)
+ 
+   const slug = event?.slug
+ 
+@@ -37,6 +39,7 @@ export default function RSVPForm({ event }) {
+       })
+       const data = await response.json().catch(() => ({}))
+       if (!response.ok) throw new Error(data.error || 'No se pudo guardar la respuesta')
++      setNotified(Boolean(data.notified))
+       setSubmitted(true)
+       await loadCount()
+     } catch (err) {
+@@ -48,13 +51,13 @@ export default function RSVPForm({ event }) {
+ 
+   const notifyWhatsApp = () => {
+     if (!event?.contactWhatsApp) return
+-    const phone = String(event.contactWhatsApp).replace(/\D/g, '')
+-    const message = encodeURIComponent(
+-      `¡Hola! Ya confirmé mi asistencia al cumple de ${event.childName || ''}.\n` +
+-      `Nombre: ${form.name}\nAcompañantes: ${form.guests}` +
+-      (form.notes ? `\nNotas: ${form.notes}` : ''),
+-    )
+-    window.open(`https://wa.me/${phone}?text=${message}`, '_blank')
++    window.open(whatsappLinks.rsvp({
++      name: form.name,
++      slug,
++      guests: form.guests,
++      status: form.status,
++      phone: event.contactWhatsApp,
++    }), '_blank')
+   }
+ 
+   if (submitted) {
+@@ -92,14 +95,20 @@ export default function RSVPForm({ event }) {
+           {count.confirmed} confirmados · {count.guests} acompañantes
+         </div>
+         <div className="mt-6 flex flex-col gap-2">
+-          {event?.contactWhatsApp && form.status === 'confirmed' && (
+-            <button
+-              onClick={notifyWhatsApp}
+-              className="inline-flex items-center justify-center gap-2 px-6 py-3 rounded-full font-bold text-white"
+-              style={{ background: 'linear-gradient(90deg, #22c55e, #16a34a)', boxShadow: '0 8px 32px rgba(34,197,94,0.4)' }}
+-            >
+-              <MessageCircle size={18} /> Avisar también por WhatsApp
+-            </button>
++          {notified ? (
++            <p className="inline-flex items-center gap-2 text-sm text-green-200/90">
++              <Check size={16} /> Avisamos al operador por WhatsApp (InvitaFigus).
++            </p>
++          ) : (
++            event?.contactWhatsApp && form.status === 'confirmed' && (
++              <button
++                onClick={notifyWhatsApp}
++                className="inline-flex items-center justify-center gap-2 px-6 py-3 rounded-full font-bold text-white"
++                style={{ background: 'linear-gradient(90deg, #22c55e, #16a34a)', boxShadow: '0 8px 32px rgba(34,197,94,0.4)' }}
++              >
++                <MessageCircle size={18} /> Avisar por WhatsApp
++              </button>
++            )
+           )}
+           <button
+             onClick={() => { setSubmitted(false); setForm({ name: '', whatsapp: '', status: 'confirmed', guests: 0, notes: '' }) }}
+diff --git a/src/config/whatsapp.js b/src/config/whatsapp.js
+new file mode 100644
+index 0000000..63aa05c
+--- /dev/null
++++ b/src/config/whatsapp.js
+@@ -0,0 +1,37 @@
++// Un solo lugar para todos los enlaces de WhatsApp del operador.
++// El prefijo identifica el producto y la intención para que el operador
++// pueda separar los mensajes de InvitaFigus de otros productos digitales.
++
++export const PRODUCT = 'InvitaFigus'
++export const OPERATOR_NUMBER = '5493885212331'
++
++const digits = (phone) => String(phone || '').replace(/\D/g, '')
++
++export function chatUrl({ intent, detail = '', phone = OPERATOR_NUMBER }) {
++  const tag = `[${PRODUCT} · ${intent.toUpperCase()}]`
++  const text = detail ? `${tag}\n${detail}` : tag
++  return `https://wa.me/${digits(phone)}?text=${encodeURIComponent(text)}`
++}
++
++export const whatsappLinks = {
++  support: () => chatUrl({ intent: 'consulta', detail: 'Hola, necesito ayuda con una invitación.' }),
++
++  payment: (name, slug) => chatUrl({
++    intent: 'pago',
++    detail: `Ya pagué la invitación de ${name || '?'}. Código: ${slug || '?'}. Envío la foto por aquí.`,
++  }),
++
++  rsvp: ({ name, slug, guests, status, phone }) => chatUrl({
++    intent: 'rsvp',
++    phone: phone || OPERATOR_NUMBER,
++    detail: `${name} ${status === 'confirmed' ? 'confirmó su asistencia' : 'no podrá asistir'}. Acompañantes: ${guests || 0}. Código: ${slug || '?'}.`,
++  }),
++
++  delivery: (invitation, link) => chatUrl({
++    intent: 'entrega',
++    phone: invitation?.telefono || OPERATOR_NUMBER,
++    detail: `Tu invitación de InvitaFigus está lista: ${invitation?.nombre || '?'} (${invitation?.slug || '?'}). Link: ${link}`,
++  }),
++
++  missing: () => chatUrl({ intent: 'consulta', detail: 'No encuentro mi invitación, ¿me ayudan?' }),
++}
+diff --git a/src/pages/AdminPage.jsx b/src/pages/AdminPage.jsx
+index 72093ed..f052bbc 100644
+--- a/src/pages/AdminPage.jsx
++++ b/src/pages/AdminPage.jsx
+@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
+ import { useNavigate } from 'react-router-dom'
+ import { useApp } from '../context/AppContext'
+ import { fetchAllInvitations, activateInvitationRemote, deleteInvitationRemote, updateInvitationField } from '../services/googleSheetsApi'
++import { whatsappLinks } from '../config/whatsapp'
+ 
+ export default function AdminPage() {
+   const navigate = useNavigate()
+@@ -133,13 +134,7 @@ export default function AdminPage() {
+ 
+   const openWhatsApp = (inv) => {
+     const url = `${window.location.origin}/invitacion/${inv.slug}`
+-    const text = `¡Hola! Tu invitación de InvitaFigus está lista 🎉\n\n` +
+-      `👤 ${inv.nombre} ${inv.apellido || ''}\n` +
+-      `⚽ ${inv.edad} años · ${inv.equipo}\n` +
+-      `📅 ${inv.fecha}\n\n` +
+-      `👉 Link: ${url}\n\n` +
+-      `¡Compartila con tus invitados!`
+-    window.open(`https://wa.me/${inv.telefono}?text=${encodeURIComponent(text)}`, '_blank')
++    window.open(whatsappLinks.delivery(inv, url), '_blank')
+   }
+ 
+   if (!isLoggedIn) {
+diff --git a/src/pages/CreatePage.jsx b/src/pages/CreatePage.jsx
+index 7d0be4b..85e4972 100644
+--- a/src/pages/CreatePage.jsx
++++ b/src/pages/CreatePage.jsx
+@@ -7,8 +7,8 @@ import PlayerCard from '../components/invitation/PlayerCard'
+ import Watermark from '../components/invitation/Watermark'
+ import { sendToGoogleForm } from '../services/googleForm'
+ import { teams } from '../data/teams'
++import { whatsappLinks } from '../config/whatsapp'
+ 
+-const WHATSAPP_NUMBER = '5493885212331'
+ 
+ export default function CreatePage() {
+   const navigate = useNavigate()
+@@ -422,7 +422,7 @@ export default function CreatePage() {
+ 
+               <div className="space-y-4">
+                 <a 
+-                  href={`https://wa.me/${WHATSAPP_NUMBER}?text=¡Hola!%20Acabo%20de%20pagar%20mi%20invitación%20InvitaFigus.%20Te%20envío%20la%20foto%20del%20cumpleañero.`}
++                  href={whatsappLinks.payment(formData.childName, createdInvitation?.slug)}
+                   target="_blank"
+                   rel="noopener noreferrer"
+                   className="w-full py-4 rounded-xl bg-[#25D366] text-white font-bold text-lg tracking-wide hover:opacity-90 transition-all shadow-lg shadow-[#25D366]/20 flex items-center justify-center gap-3"
+diff --git a/src/pages/HomePage.jsx b/src/pages/HomePage.jsx
+index af2209f..0ca2877 100644
+--- a/src/pages/HomePage.jsx
++++ b/src/pages/HomePage.jsx
+@@ -3,9 +3,9 @@ import { useNavigate } from 'react-router-dom'
+ import { motion, AnimatePresence } from 'framer-motion'
+ import { ArrowRight, Sparkles, Camera, Share2, Star, ChevronDown, MessageCircle, Clock, Shield, Zap, Heart, Trophy, X, Check } from 'lucide-react'
+ import { teams } from '../data/teams'
++import { whatsappLinks } from '../config/whatsapp'
+ 
+ // Número de WhatsApp - CAMBIAR POR TU NÚMERO REAL
+-const WHATSAPP_NUMBER = '5493885212331'
+ 
+ // ─── DATOS ─────────────────────────────────────────
+ 
+@@ -222,7 +222,7 @@ export default function HomePage() {
+   const [showPaymentModal, setShowPaymentModal] = useState(false)
+ 
+   const openWhatsApp = () => {
+-    window.open(`https://wa.me/${WHATSAPP_NUMBER}`, '_blank')
++    window.open(whatsappLinks.support(), '_blank')
+   }
+ 
+   return (
+diff --git a/src/pages/InvitationPage.jsx b/src/pages/InvitationPage.jsx
+index 2c17941..b0e8e57 100644
+--- a/src/pages/InvitationPage.jsx
++++ b/src/pages/InvitationPage.jsx
+@@ -12,7 +12,6 @@ import CountdownTimer from "../components/invitation/CountdownTimer";
+ import RSVPForm from "../components/invitation/RSVPForm";
+ import ShareButtons from "../components/invitation/ShareButtons";
+ 
+-const WHATSAPP_NUMBER = '5493885212331';
+ 
+ const InvitationPage = () => {
+   const { slug } = useParams();
+@@ -158,7 +157,7 @@ const InvitationPage = () => {
+             Crear mi invitación
+           </button>
+           <button
+-            onClick={() => window.open(`https://wa.me/${WHATSAPP_NUMBER}`, '_blank')}
++            onClick={() => window.open(whatsappLinks.missing(), '_blank')}
+             className="w-full px-6 py-3 bg-[#22c55e] text-white font-bold rounded-lg hover:bg-[#16a34a] transition-colors"
+           >
+             📱 Consultar por WhatsApp
+-- 
+2.47.3
+

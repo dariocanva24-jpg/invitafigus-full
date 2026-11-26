@@ -1,0 +1,182 @@
+From 279fd75a12912b3d6019f9a1b9ecb3c922044973 Mon Sep 17 00:00:00 2001
+From: Arena Agent <agent@arena.ai>
+Date: Thu, 26 Nov 2026 12:55:36 +0000
+Subject: [PATCH] feat: tags de WhatsApp por producto y enlace reciproco a
+ InvitaFigus
+
+---
+ .gitignore                              |  7 +++++++
+ src/app/admin/page.tsx                  |  3 ++-
+ src/app/encargar/page.tsx               |  3 ++-
+ src/app/page.tsx                        | 11 ++++++++++-
+ src/components/OrganizerPanelClient.tsx |  3 ++-
+ src/components/PaymentPendingBanner.tsx |  2 +-
+ src/components/TestimonialsSection.tsx  |  3 ++-
+ src/components/WhatsAppFloat.tsx        |  3 ++-
+ src/config/business.ts                  | 14 ++++++++++++--
+ 9 files changed, 40 insertions(+), 9 deletions(-)
+ create mode 100644 .gitignore
+
+diff --git a/.gitignore b/.gitignore
+new file mode 100644
+index 00000000..2e875228
+--- /dev/null
++++ b/.gitignore
+@@ -0,0 +1,7 @@
++node_modules/
++.next/
++.env
++.env.*
++!.env.example
++*.log
++.DS_Store
+diff --git a/src/app/admin/page.tsx b/src/app/admin/page.tsx
+index b16743b8..bbf1a23e 100644
+--- a/src/app/admin/page.tsx
++++ b/src/app/admin/page.tsx
+@@ -18,6 +18,7 @@ import {
+ import { EditorialDiamondIcon } from "@/components/BrandOrnaments";
+ import type { EventRecord, OrderStatus, PaymentStatus } from "@/lib/db";
+ import { INVITATION_SKINS } from "@/templates/catalog";
++import { taggedWhatsAppMessage } from "@/config/business";
+ 
+ interface AdminEventRow extends EventRecord {
+   rsvpCount: number;
+@@ -362,7 +363,7 @@ export default function AdminPage() {
+                   </button>
+                   {cleanPhone && (
+                     <a
+-                      href={`https://wa.me/${cleanPhone}`}
++                      href={`https://wa.me/${cleanPhone}?text=${encodeURIComponent(taggedWhatsAppMessage(`Hola ${row.contactName}, tu invitación de InvitaStudio está lista. Código: ${row.orderCode || row.id}`, "ENTREGA"))}`}
+                       target="_blank"
+                       rel="noopener noreferrer"
+                       className="inline-flex items-center gap-1 rounded-full bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700"
+diff --git a/src/app/encargar/page.tsx b/src/app/encargar/page.tsx
+index 5ed3570e..83a78c01 100644
+--- a/src/app/encargar/page.tsx
++++ b/src/app/encargar/page.tsx
+@@ -763,7 +763,8 @@ function EncargarForm() {
+         (createdOrder.planId === "asistido" && createdOrder.songRequest
+           ? `• Canción pedida (Llave en Mano): ${createdOrder.songRequest} — Nuestro equipo preparará y cargará esta canción en tu invitación definitiva antes de la entrega.\n`
+           : "") +
+-        `• Contacto: ${createdOrder.contactName} | Email: ${createdOrder.email}`
++        `• Contacto: ${createdOrder.contactName} | Email: ${createdOrder.email}`,
++      "PEDIDO"
+     );
+ 
+     return (
+diff --git a/src/app/page.tsx b/src/app/page.tsx
+index eeedecfe..94c55471 100644
+--- a/src/app/page.tsx
++++ b/src/app/page.tsx
+@@ -647,7 +647,8 @@ export default function HomePage() {
+                 </MotionTap>
+                 {(() => {
+                   const waUrl = getWhatsAppHref(
+-                    `¡Hola ${BUSINESS_CONFIG.brandName}! Quiero consultar por una invitación digital.`
++                    `¡Hola ${BUSINESS_CONFIG.brandName}! Quiero consultar por una invitación digital.`,
++                    "CONSULTA"
+                   );
+                   return waUrl ? (
+                     <MotionTap>
+@@ -705,6 +706,14 @@ export default function HomePage() {
+               <Link href="/admin" className="py-1 hover:text-[#6B1E30]">
+                 Admin
+               </Link>
++              <a
++                href="https://invitafigus.vercel.app"
++                target="_blank"
++                rel="noopener noreferrer"
++                className="py-1 hover:text-[#6B1E30]"
++              >
++                Cumples futboleros · InvitaFigus
++              </a>
+             </nav>
+           </div>
+         </div>
+diff --git a/src/components/OrganizerPanelClient.tsx b/src/components/OrganizerPanelClient.tsx
+index 83df3a95..d5d61846 100644
+--- a/src/components/OrganizerPanelClient.tsx
++++ b/src/components/OrganizerPanelClient.tsx
+@@ -557,7 +557,8 @@ export function OrganizerPanelClient({
+               </div>
+               {(() => {
+                 const assistWa = getWhatsAppHref(
+-                  `¡Hola! Soy organizador del pedido ${event.orderCode} (${event.eventTitle}) con Plan Llave en Mano. Quiero enviar fotos/cambios o la canción de fondo para que lo carguen en mi invitación.`
++                  `¡Hola! Soy organizador del pedido ${event.orderCode} (${event.eventTitle}) con Plan Llave en Mano. Quiero enviar fotos/cambios o la canción de fondo para que lo carguen en mi invitación.`,
++                  "CAMBIOS"
+                 );
+                 return assistWa ? (
+                   <a
+diff --git a/src/components/PaymentPendingBanner.tsx b/src/components/PaymentPendingBanner.tsx
+index 4d4c3101..98b848e3 100644
+--- a/src/components/PaymentPendingBanner.tsx
++++ b/src/components/PaymentPendingBanner.tsx
+@@ -25,7 +25,7 @@ export function PaymentPendingBanner({
+     PRICING_PLANS.find((p) => p.id === event.planId) ?? PRICING_PLANS[1];
+ 
+   const paymentSummaryMsg = `¡Hola! Quiero abonar por transferencia mi pedido ${event.orderCode} (${planObj.name} · ${planObj.transferPrice} ARS) para activar mi invitación "${event.eventTitle}".`;
+-  const whatsappHref = getWhatsAppHref(paymentSummaryMsg);
++  const whatsappHref = getWhatsAppHref(paymentSummaryMsg, "PAGO");
+ 
+   const handleCopySummary = async () => {
+     try {
+diff --git a/src/components/TestimonialsSection.tsx b/src/components/TestimonialsSection.tsx
+index 24651c3c..76e71b9b 100644
+--- a/src/components/TestimonialsSection.tsx
++++ b/src/components/TestimonialsSection.tsx
+@@ -51,7 +51,8 @@ const TRUST_GUARANTEES = [
+ export function TestimonialsSection() {
+   const items = getAuthorizedTestimonials();
+   const reviewWaHref = getWhatsAppHref(
+-    `Hola! Usé ${BUSINESS_CONFIG.brandName} para mi evento y quiero dejar mi reseña verificada:`
++    `Hola! Usé ${BUSINESS_CONFIG.brandName} para mi evento y quiero dejar mi reseña verificada:`,
++    "RESEÑA"
+   );
+ 
+   return (
+diff --git a/src/components/WhatsAppFloat.tsx b/src/components/WhatsAppFloat.tsx
+index e9e23fa0..ce7935b2 100644
+--- a/src/components/WhatsAppFloat.tsx
++++ b/src/components/WhatsAppFloat.tsx
+@@ -4,7 +4,8 @@ import { BUSINESS_CONFIG, getWhatsAppHref } from "@/config/business";
+ 
+ export function WhatsAppFloat() {
+   const href = getWhatsAppHref(
+-    `¡Hola ${BUSINESS_CONFIG.brandName}! Quiero consultar por una invitación digital.`
++    `¡Hola ${BUSINESS_CONFIG.brandName}! Quiero consultar por una invitación digital.`,
++    "CONSULTA"
+   );
+   if (!href) {
+     return null;
+diff --git a/src/config/business.ts b/src/config/business.ts
+index 7a073b7b..aa58b582 100644
+--- a/src/config/business.ts
++++ b/src/config/business.ts
+@@ -50,11 +50,21 @@ export const BUSINESS_CONFIG = {
+   hasVerifiedProviderData: Boolean(rawWhatsapp && rawBankAlias),
+ };
+ 
+-export function getWhatsAppHref(message: string): string | null {
++// Prefijo común para que el operador distinga este producto de los demás
++// productos digitales que comparten el mismo número de WhatsApp.
++export const WHATSAPP_PRODUCT_TAG = "InvitaStudio";
++
++export function taggedWhatsAppMessage(message: string, intent = "CONSULTA"): string {
++  return `[${WHATSAPP_PRODUCT_TAG} · ${intent.toUpperCase()}]\n${message}`;
++}
++
++export function getWhatsAppHref(message: string, intent?: string): string | null {
+   if (!BUSINESS_CONFIG.whatsappConfigured || !BUSINESS_CONFIG.whatsappNumber) {
+     return null;
+   }
+-  return `https://wa.me/${BUSINESS_CONFIG.whatsappNumber}?text=${encodeURIComponent(message)}`;
++  return `https://wa.me/${BUSINESS_CONFIG.whatsappNumber}?text=${encodeURIComponent(
++    taggedWhatsAppMessage(message, intent)
++  )}`;
+ }
+ 
+ export interface PlanPricing {
+-- 
+2.47.3
+

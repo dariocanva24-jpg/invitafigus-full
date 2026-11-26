@@ -1,0 +1,866 @@
+From ad0df109c2c5dfcffb142d8a3c083a2d89273a4e Mon Sep 17 00:00:00 2001
+From: Arena Agent <agent@arena.ai>
+Date: Thu, 26 Nov 2026 02:48:07 +0000
+Subject: [PATCH 1/6] security: auth y escrituras fuera del bundle, proxy
+ serverless y limpieza de .env
+
+---
+ .env.example                    |   5 +
+ .gitignore                      |   7 +-
+ api/admin-login.js              |  16 +++
+ api/admin-logout.js             |   6 ++
+ api/admin-proxy.js              |  26 +++++
+ api/invitations.js              |  28 +++++
+ lib/server/auth.js              |  65 ++++++++++++
+ lib/server/sheets.js            |  53 +++++++++
+ package-lock.json               |  56 +++-------
+ package.json                    |   9 +-
+ src/App.jsx                     |   3 +-
+ src/pages/AdminPage.jsx         |  33 ++++--
+ src/services/googleForm.js      |   8 +-
+ src/services/googleSheetsApi.js | 183 +++++++-------------------------
+ vite.config.js                  |  47 +++++++-
+ 15 files changed, 337 insertions(+), 208 deletions(-)
+ create mode 100644 .env.example
+ create mode 100644 api/admin-login.js
+ create mode 100644 api/admin-logout.js
+ create mode 100644 api/admin-proxy.js
+ create mode 100644 api/invitations.js
+ create mode 100644 lib/server/auth.js
+ create mode 100644 lib/server/sheets.js
+
+diff --git a/.env.example b/.env.example
+new file mode 100644
+index 0000000..6de4646
+--- /dev/null
++++ b/.env.example
+@@ -0,0 +1,5 @@
++# Configurar en Vercel > Project Settings > Environment Variables.
++# NINGUNA de estas variables lleva prefijo VITE_: no deben llegar al bundle.
++ADMIN_PASSWORD=contraseña-larga-y-aleatoria
++SESSION_SECRET=otro-secreto-largo-y-aleatorio
++APPS_SCRIPT_URL=https://script.google.com/macros/s/TU_ID/exec
+diff --git a/.gitignore b/.gitignore
+index 52138d4..cf95c06 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -1,3 +1,8 @@
+ node_modules
+ dist
+-.vercel
+\ No newline at end of file
++.vercel
++.env
++.env.*
++!.env.example
++*.log
++.DS_Store
+diff --git a/api/admin-login.js b/api/admin-login.js
+new file mode 100644
+index 0000000..2a56723
+--- /dev/null
++++ b/api/admin-login.js
+@@ -0,0 +1,16 @@
++import { createSessionToken, passwordMatches, readJson, sendJson, setSessionCookie } from '../lib/server/auth.js'
++
++export default async function handler(req, res) {
++  if (req.method !== 'POST') return sendJson(res, 405, { error: 'Método no permitido' })
++
++  const { password } = await readJson(req)
++  const expected = process.env.ADMIN_PASSWORD
++  if (!expected) return sendJson(res, 500, { error: 'ADMIN_PASSWORD no configurado en el servidor' })
++
++  if (!passwordMatches(password, expected)) {
++    return sendJson(res, 401, { error: 'Contraseña incorrecta' })
++  }
++
++  setSessionCookie(res, createSessionToken())
++  return sendJson(res, 200, { ok: true })
++}
+diff --git a/api/admin-logout.js b/api/admin-logout.js
+new file mode 100644
+index 0000000..874e00e
+--- /dev/null
++++ b/api/admin-logout.js
+@@ -0,0 +1,6 @@
++import { clearSessionCookie, sendJson } from '../lib/server/auth.js'
++
++export default function handler(_req, res) {
++  clearSessionCookie(res)
++  return sendJson(res, 200, { ok: true })
++}
+diff --git a/api/admin-proxy.js b/api/admin-proxy.js
+new file mode 100644
+index 0000000..3a74e7e
+--- /dev/null
++++ b/api/admin-proxy.js
+@@ -0,0 +1,26 @@
++import { isAdminRequest, readJson, sendJson } from '../lib/server/auth.js'
++import { readFromSheets, writeToSheets } from '../lib/server/sheets.js'
++
++export default async function handler(req, res) {
++  if (!isAdminRequest(req)) return sendJson(res, 401, { error: 'Sesión expirada. Ingresá de nuevo.' })
++
++  try {
++    if (req.method === 'GET') {
++      const action = new URL(req.url, 'http://localhost').searchParams.get('action') || 'getAll'
++      if (action !== 'getAll') return sendJson(res, 400, { error: 'Acción no permitida' })
++      return sendJson(res, 200, await readFromSheets(action))
++    }
++
++    if (req.method === 'POST') {
++      const body = await readJson(req)
++      const { action, ...params } = body
++      const data = await writeToSheets(action, params)
++      return sendJson(res, 200, { ok: true, data })
++    }
++
++    return sendJson(res, 405, { error: 'Método no permitido' })
++  } catch (error) {
++    console.error('admin-proxy:', error.message)
++    return sendJson(res, 502, { error: error.message })
++  }
++}
+diff --git a/api/invitations.js b/api/invitations.js
+new file mode 100644
+index 0000000..d72237f
+--- /dev/null
++++ b/api/invitations.js
+@@ -0,0 +1,28 @@
++import { readJson, sendJson } from '../lib/server/auth.js'
++import { readFromSheets, writeToSheets } from '../lib/server/sheets.js'
++
++// Endpoints públicos: solo lectura por slug y contador de vistas.
++export default async function handler(req, res) {
++  try {
++    if (req.method === 'GET') {
++      const slug = new URL(req.url, 'http://localhost').searchParams.get('slug')
++      if (!slug) return sendJson(res, 400, { error: 'Falta el slug' })
++      const event = await readFromSheets('getBySlug', { slug })
++      return sendJson(res, 200, event)
++    }
++
++    if (req.method === 'POST') {
++      const body = await readJson(req)
++      if (body.action !== 'incrementViews' || !body.slug) {
++        return sendJson(res, 400, { error: 'Acción no permitida' })
++      }
++      const data = await writeToSheets('incrementViews', { slug: body.slug })
++      return sendJson(res, 200, { views: data.views })
++    }
++
++    return sendJson(res, 405, { error: 'Método no permitido' })
++  } catch (error) {
++    console.error('invitations:', error.message)
++    return sendJson(res, 502, { error: error.message })
++  }
++}
+diff --git a/lib/server/auth.js b/lib/server/auth.js
+new file mode 100644
+index 0000000..9bda455
+--- /dev/null
++++ b/lib/server/auth.js
+@@ -0,0 +1,65 @@
++import crypto from 'node:crypto'
++
++const COOKIE_NAME = 'if_admin'
++const SESSION_HOURS = 8
++
++const secret = () => process.env.SESSION_SECRET || 'dev-secret-change-me'
++
++export function createSessionToken() {
++  const payload = Buffer.from(
++    JSON.stringify({ admin: true, exp: Date.now() + SESSION_HOURS * 3600 * 1000 }),
++  ).toString('base64url')
++  const signature = crypto.createHmac('sha256', secret()).update(payload).digest('base64url')
++  return `${payload}.${signature}`
++}
++
++export function isAdminRequest(req) {
++  const cookies = (req.headers.cookie || '').split(';').map((item) => item.trim())
++  const token = cookies.find((item) => item.startsWith(`${COOKIE_NAME}=`))?.slice(COOKIE_NAME.length + 1)
++  if (!token) return false
++  const [payload, signature] = token.split('.')
++  if (!payload || !signature) return false
++  const expected = crypto.createHmac('sha256', secret()).update(payload).digest('base64url')
++  const a = Buffer.from(signature)
++  const b = Buffer.from(expected)
++  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return false
++  try {
++    const data = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'))
++    return data.admin === true && data.exp > Date.now()
++  } catch {
++    return false
++  }
++}
++
++export function setSessionCookie(res, token) {
++  const secure = process.env.NODE_ENV === 'production' ? '; Secure' : ''
++  res.setHeader(
++    'Set-Cookie',
++    `${COOKIE_NAME}=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${SESSION_HOURS * 3600}${secure}`,
++  )
++}
++
++export function clearSessionCookie(res) {
++  res.setHeader('Set-Cookie', `${COOKIE_NAME}=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0`)
++}
++
++export async function readJson(req) {
++  if (req.body && typeof req.body === 'object') return req.body
++  let raw = ''
++  for await (const chunk of req) raw += chunk
++  if (!raw) return {}
++  try { return JSON.parse(raw) } catch { return {} }
++}
++
++export function sendJson(res, status, data) {
++  res.statusCode = status
++  res.setHeader('Content-Type', 'application/json; charset=utf-8')
++  res.end(JSON.stringify(data))
++}
++
++export function passwordMatches(provided, expected) {
++  if (typeof provided !== 'string' || !expected) return false
++  const a = Buffer.from(provided)
++  const b = Buffer.from(expected)
++  return a.length === b.length && crypto.timingSafeEqual(a, b)
++}
+diff --git a/lib/server/sheets.js b/lib/server/sheets.js
+new file mode 100644
+index 0000000..ff7488f
+--- /dev/null
++++ b/lib/server/sheets.js
+@@ -0,0 +1,53 @@
++const READ_ACTIONS = new Set(['getAll', 'getBySlug'])
++const WRITE_ACTIONS = new Set(['updateStatus', 'deleteRow', 'updateField', 'incrementViews'])
++
++function scriptUrl() {
++  if (!process.env.APPS_SCRIPT_URL) {
++    throw new Error('APPS_SCRIPT_URL no configurada en el servidor')
++  }
++  return process.env.APPS_SCRIPT_URL
++}
++
++async function withTimeout(signalFn) {
++  const controller = new AbortController()
++  const timer = setTimeout(() => controller.abort(), 15000)
++  try {
++    return await signalFn(controller.signal)
++  } finally {
++    clearTimeout(timer)
++  }
++}
++
++export async function readFromSheets(action, params = {}) {
++  if (!READ_ACTIONS.has(action)) throw new Error('Acción de lectura no permitida')
++  const url = new URL(scriptUrl())
++  url.searchParams.set('action', action)
++  Object.entries(params).forEach(([key, value]) => {
++    if (value !== undefined && value !== null) url.searchParams.set(key, String(value))
++  })
++  const response = await withTimeout((signal) => fetch(url, { signal, redirect: 'follow' }))
++  const data = await response.json()
++  if (!data.success) throw new Error(data.error || 'Error al leer Google Sheets')
++  return data.data
++}
++
++export async function writeToSheets(action, params = {}) {
++  if (!WRITE_ACTIONS.has(action)) throw new Error('Acción de escritura no permitida')
++  const body = new URLSearchParams()
++  Object.entries(params).forEach(([key, value]) => {
++    body.set(key, value === undefined || value === null ? '' : String(value))
++  })
++  const response = await withTimeout((signal) => fetch(`${scriptUrl()}?action=${action}`, {
++    method: 'POST',
++    redirect: 'follow',
++    credentials: 'omit',
++    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
++    body,
++    signal,
++  }))
++  const data = await response.json()
++  if (!data.success) throw new Error(data.error || 'Error al escribir en Google Sheets')
++  return data
++}
++
++export { READ_ACTIONS, WRITE_ACTIONS }
+diff --git a/package-lock.json b/package-lock.json
+index d5b0319..73044a0 100644
+--- a/package-lock.json
++++ b/package-lock.json
+@@ -19,6 +19,7 @@
+         "@types/react-dom": "^18.2.17",
+         "@vitejs/plugin-react": "^4.2.1",
+         "autoprefixer": "^10.4.16",
++        "dotenv": "^18.0.10",
+         "postcss": "^8.4.32",
+         "tailwindcss": "^3.4.0",
+         "vite": "^5.0.8"
+@@ -923,9 +924,6 @@
+         "arm"
+       ],
+       "dev": true,
+-      "libc": [
+-        "glibc"
+-      ],
+       "license": "MIT",
+       "optional": true,
+       "os": [
+@@ -940,9 +938,6 @@
+         "arm"
+       ],
+       "dev": true,
+-      "libc": [
+-        "musl"
+-      ],
+       "license": "MIT",
+       "optional": true,
+       "os": [
+@@ -957,9 +952,6 @@
+         "arm64"
+       ],
+       "dev": true,
+-      "libc": [
+-        "glibc"
+-      ],
+       "license": "MIT",
+       "optional": true,
+       "os": [
+@@ -974,9 +966,6 @@
+         "arm64"
+       ],
+       "dev": true,
+-      "libc": [
+-        "musl"
+-      ],
+       "license": "MIT",
+       "optional": true,
+       "os": [
+@@ -991,9 +980,6 @@
+         "loong64"
+       ],
+       "dev": true,
+-      "libc": [
+-        "glibc"
+-      ],
+       "license": "MIT",
+       "optional": true,
+       "os": [
+@@ -1008,9 +994,6 @@
+         "loong64"
+       ],
+       "dev": true,
+-      "libc": [
+-        "musl"
+-      ],
+       "license": "MIT",
+       "optional": true,
+       "os": [
+@@ -1025,9 +1008,6 @@
+         "ppc64"
+       ],
+       "dev": true,
+-      "libc": [
+-        "glibc"
+-      ],
+       "license": "MIT",
+       "optional": true,
+       "os": [
+@@ -1042,9 +1022,6 @@
+         "ppc64"
+       ],
+       "dev": true,
+-      "libc": [
+-        "musl"
+-      ],
+       "license": "MIT",
+       "optional": true,
+       "os": [
+@@ -1059,9 +1036,6 @@
+         "riscv64"
+       ],
+       "dev": true,
+-      "libc": [
+-        "glibc"
+-      ],
+       "license": "MIT",
+       "optional": true,
+       "os": [
+@@ -1076,9 +1050,6 @@
+         "riscv64"
+       ],
+       "dev": true,
+-      "libc": [
+-        "musl"
+-      ],
+       "license": "MIT",
+       "optional": true,
+       "os": [
+@@ -1093,9 +1064,6 @@
+         "s390x"
+       ],
+       "dev": true,
+-      "libc": [
+-        "glibc"
+-      ],
+       "license": "MIT",
+       "optional": true,
+       "os": [
+@@ -1110,9 +1078,6 @@
+         "x64"
+       ],
+       "dev": true,
+-      "libc": [
+-        "glibc"
+-      ],
+       "license": "MIT",
+       "optional": true,
+       "os": [
+@@ -1127,9 +1092,6 @@
+         "x64"
+       ],
+       "dev": true,
+-      "libc": [
+-        "musl"
+-      ],
+       "license": "MIT",
+       "optional": true,
+       "os": [
+@@ -1597,6 +1559,22 @@
+       "dev": true,
+       "license": "MIT"
+     },
++    "node_modules/dotenv": {
++      "version": "18.0.10",
++      "resolved": "https://registry.npmjs.org/dotenv/-/dotenv-18.0.10.tgz",
++      "integrity": "sha512-89FAA1xchzK2mxVWdr5F/0rldwiueXs6zJM86rO66EzekR1iBdiXRthyG+m5GvkJaFH3C2LESzamTkgndmLT2A==",
++      "dev": true,
++      "license": "BSD-2-Clause",
++      "bin": {
++        "dotenv": "dist/cli.cjs"
++      },
++      "engines": {
++        "node": ">=12"
++      },
++      "funding": {
++        "url": "https://dotenvx.com"
++      }
++    },
+     "node_modules/electron-to-chromium": {
+       "version": "1.5.372",
+       "resolved": "https://registry.npmjs.org/electron-to-chromium/-/electron-to-chromium-1.5.372.tgz",
+diff --git a/package.json b/package.json
+index 0255621..1efb303 100644
+--- a/package.json
++++ b/package.json
+@@ -9,19 +9,20 @@
+     "preview": "vite preview"
+   },
+   "dependencies": {
++    "framer-motion": "^10.16.0",
++    "lucide-react": "^0.294.0",
+     "react": "^18.2.0",
+     "react-dom": "^18.2.0",
+-    "react-router-dom": "^6.21.0",
+-    "framer-motion": "^10.16.0",
+-    "lucide-react": "^0.294.0"
++    "react-router-dom": "^6.21.0"
+   },
+   "devDependencies": {
+     "@types/react": "^18.2.43",
+     "@types/react-dom": "^18.2.17",
+     "@vitejs/plugin-react": "^4.2.1",
+     "autoprefixer": "^10.4.16",
++    "dotenv": "^18.0.10",
+     "postcss": "^8.4.32",
+     "tailwindcss": "^3.4.0",
+     "vite": "^5.0.8"
+   }
+-}
+\ No newline at end of file
++}
+diff --git a/src/App.jsx b/src/App.jsx
+index 8b8363e..3e287f1 100644
+--- a/src/App.jsx
++++ b/src/App.jsx
+@@ -4,7 +4,7 @@ import HomePage from './pages/HomePage'
+ import InvitationPage from './pages/InvitationPage'
+ import CreatePage from './pages/CreatePage'
+ import AdminPage from './pages/AdminPage'
+-import PhotoUploadPOC from './components/poc/PhotoUploadPOC';
++// La ruta /poc-foto (prueba de subida a Drive) se quitó de producción por seguridad.
+ 
+ function App() {
+   return (
+@@ -14,7 +14,6 @@ function App() {
+         <Route path="/invitacion/:slug" element={<InvitationPage />} />
+         <Route path="/crear" element={<CreatePage />} />
+         <Route path="/admin" element={<AdminPage />} />
+-        <Route path="/poc-foto" element={<PhotoUploadPOC />} />
+       </Routes>
+     </AppProvider>
+   )
+diff --git a/src/pages/AdminPage.jsx b/src/pages/AdminPage.jsx
+index b91ddb5..036fbf0 100644
+--- a/src/pages/AdminPage.jsx
++++ b/src/pages/AdminPage.jsx
+@@ -3,8 +3,6 @@ import { useNavigate } from 'react-router-dom'
+ import { useApp } from '../context/AppContext'
+ import { fetchAllInvitations, activateInvitationRemote, deleteInvitationRemote, updateInvitationField } from '../services/googleSheetsApi'
+ 
+-const ADMIN_PASSWORD = 'invitafigus2026'
+-
+ export default function AdminPage() {
+   const navigate = useNavigate()
+   const { shareWhatsApp } = useApp()
+@@ -36,16 +34,31 @@ export default function AdminPage() {
+     }
+   }, [isLoggedIn])
+ 
+-  const handleLogin = (e) => {
++  const handleLogin = async (e) => {
+     e.preventDefault()
+-    if (password === ADMIN_PASSWORD) {
++    setError('')
++    try {
++      const response = await fetch('/api/admin-login', {
++        method: 'POST',
++        credentials: 'same-origin',
++        headers: { 'Content-Type': 'application/json' },
++        body: JSON.stringify({ password }),
++      })
++      const data = await response.json().catch(() => ({}))
++      if (!response.ok) throw new Error(data.error || 'No se pudo ingresar')
+       setIsLoggedIn(true)
+-      setError('')
+-    } else {
+-      setError('Contraseña incorrecta')
++      setPassword('')
++    } catch (err) {
++      setError(err.message)
+     }
+   }
+ 
++  const handleLogout = async () => {
++    await fetch('/api/admin-logout', { method: 'POST', credentials: 'same-origin' }).catch(() => {})
++    setIsLoggedIn(false)
++    setInvitations([])
++  }
++
+   const handleActivate = async (rowIndex) => {
+     try {
+       await activateInvitationRemote(rowIndex)
+@@ -169,6 +182,12 @@ export default function AdminPage() {
+             >
+               Volver al inicio
+             </button>
++            <button
++              onClick={handleLogout}
++              className="px-4 py-2 rounded-xl bg-red-500/10 border border-red-500/30 text-red-300 text-sm hover:bg-red-500/20 transition-colors"
++            >
++              Salir
++            </button>
+           </div>
+         </div>
+ 
+diff --git a/src/services/googleForm.js b/src/services/googleForm.js
+index 86d88b4..5bd4894 100644
+--- a/src/services/googleForm.js
++++ b/src/services/googleForm.js
+@@ -39,8 +39,7 @@ export function sendToGoogleForm(data) {
+     formData.append('draftResponse', '[]');
+     formData.append('pageHistory', '0');
+ 
+-    console.log([...formData.entries()]);
+-
++    // Nota: no-cors impide verificar la respuesta. No logueamos datos personales.
+     fetch(`https://docs.google.com/forms/d/e/${FORM_ID}/formResponse`, {
+       method: 'POST',
+       mode: 'no-cors',
+@@ -48,11 +47,8 @@ export function sendToGoogleForm(data) {
+         'Content-Type': 'application/x-www-form-urlencoded',
+       },
+       body: formData.toString(),
+-    }).catch(() => {
+-      // no-cors no devuelve respuesta, ignoramos el error
+-    });
++    }).catch(() => {});
+ 
+-    console.log('✅ Formulario enviado con datos completos');
+     resolve(true);
+   });
+ }
+\ No newline at end of file
+diff --git a/src/services/googleSheetsApi.js b/src/services/googleSheetsApi.js
+index 99a2d5a..0b33994 100644
+--- a/src/services/googleSheetsApi.js
++++ b/src/services/googleSheetsApi.js
+@@ -1,165 +1,58 @@
+ // ============================================
+-// INVITAFIGUS - CLIENTE API PARA GOOGLE SHEETS
++// CLIENTE API — todas las llamadas pasan por funciones serverless.
++// La URL de Google Apps Script y las credenciales viven solo en el servidor.
+ // ============================================
+ 
+-const SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbwnNN9MODj8ahb_tKXr1aBi7O2tq0g0fZhJaXfRdvuGn-un8-6Li-zz8DjlBfr6f8LNUA/exec';
++async function request(path, options = {}) {
++  const response = await fetch(path, {
++    credentials: 'same-origin',
++    ...options,
++    headers: options.body ? { 'Content-Type': 'application/json' } : undefined,
++  })
+ 
+-export async function fetchAllInvitations() {
+-  try {
+-    const cacheBuster = Date.now();
+-    const response = await fetch(`${SCRIPT_URL}?action=getAll&_cb=${cacheBuster}`);
+-    const data = await response.json();
+-    
+-    if (!data.success) {
+-      throw new Error(data.error || 'Error al obtener invitaciones');
+-    }
+-    
+-    return data.data;
+-  } catch (error) {
+-    console.error('Error fetchAllInvitations:', error);
+-    throw error;
++  let data
++  try { data = await response.json() } catch { data = {} }
++
++  if (!response.ok) {
++    throw new Error(data.error || `Error ${response.status}`)
+   }
++  return data
++}
++
++export async function fetchAllInvitations() {
++  // Requiere cookie de admin; la validación ocurre en /api/admin-proxy.
++  return request('/api/admin-proxy?action=getAll')
+ }
+ 
+ export async function fetchInvitationBySlug(slug) {
+-  try {
+-    const cacheBuster = Date.now();
+-    const response = await fetch(`${SCRIPT_URL}?action=getBySlug&slug=${encodeURIComponent(slug)}&_cb=${cacheBuster}`);
+-    const data = await response.json();
+-    
+-    if (!data.success) {
+-      throw new Error(data.error || 'Invitacion no encontrada');
+-    }
+-    
+-    return data.data;
+-  } catch (error) {
+-    console.error('Error fetchInvitationBySlug:', error);
+-    throw error;
+-  }
++  return request(`/api/invitations?slug=${encodeURIComponent(slug)}`)
+ }
+ 
+ export async function activateInvitationRemote(rowIndex) {
+-  try {
+-    const response = await fetch(`${SCRIPT_URL}?action=updateStatus`, {
+-      method: 'POST',      
+-      redirect: 'follow',
+-      credentials: 'omit',
+-      headers: {
+-        'Content-Type': 'application/x-www-form-urlencoded',
+-      },
+-      body: new URLSearchParams({
+-        rowIndex,         // ← rowIndex en lugar de slug
+-        estado: 'ACTIVA'  // ← estado en lugar de status
+-      }),
+-    });
+-    
+-    const data = await response.json();
+-    
+-    if (!data.success) {
+-      throw new Error(data.error || 'Error al activar');
+-    }
+-    
+-    return data;
+-  } catch (error) {
+-    console.error('Error activateInvitationRemote:', error);
+-    throw error;
+-  }
++  return request('/api/admin-proxy', {
++    method: 'POST',
++    body: JSON.stringify({ action: 'updateStatus', rowIndex, estado: 'ACTIVA' }),
++  })
+ }
+ 
+ export async function deleteInvitationRemote(rowIndex) {
+-  try {
+-    const response = await fetch(`${SCRIPT_URL}?action=deleteRow`, {
+-      method: 'POST',      
+-      redirect: 'follow',
+-      credentials: 'omit',
+-      headers: {
+-        'Content-Type': 'application/x-www-form-urlencoded',
+-      },
+-      body: new URLSearchParams({
+-        rowIndex,
+-      }),
+-    });
+-    
+-    const data = await response.json();
+-    
+-    if (!data.success) {
+-      throw new Error(data.error || 'Error al eliminar');
+-    }
+-    
+-    return data;
+-  } catch (error) {
+-    console.error('Error deleteInvitationRemote:', error);
+-    throw error;
+-  }
++  return request('/api/admin-proxy', {
++    method: 'POST',
++    body: JSON.stringify({ action: 'deleteRow', rowIndex }),
++  })
+ }
+ 
+ export async function updateInvitationField(rowIndex, field, value) {
+-  const maxRetries = 2;
+-  let lastError;
+-  
+-  for (let attempt = 0; attempt < maxRetries; attempt++) {
+-    try {
+-      const controller = new AbortController();
+-      const timeoutId = setTimeout(() => controller.abort(), 15000);
+-      
+-      const response = await fetch(`${SCRIPT_URL}?action=updateField`, {
+-        method: 'POST',        
+-        redirect: 'follow',
+-        credentials: 'omit',
+-        headers: {
+-          'Content-Type': 'application/x-www-form-urlencoded',
+-        },
+-        body: new URLSearchParams({
+-          rowIndex,
+-          field,
+-          value: value || '',
+-        }),
+-        signal: controller.signal,
+-      });
+-      
+-      clearTimeout(timeoutId);
+-      const data = await response.json();
+-      
+-      if (!data.success) {
+-        throw new Error(data.error || 'Error al actualizar');
+-      }
+-      
+-      return data;
+-      
+-    } catch (error) {
+-      lastError = error;
+-      if (attempt < maxRetries - 1) {
+-        await new Promise(r => setTimeout(r, 1000 * (attempt + 1)));
+-      }
+-    }
+-  }
+-  
+-  throw lastError;
++  return request('/api/admin-proxy', {
++    method: 'POST',
++    body: JSON.stringify({ action: 'updateField', rowIndex, field, value: value || '' }),
++  })
+ }
+ 
+ export async function incrementViewsRemote(slug) {
+-  try {
+-    const response = await fetch(`${SCRIPT_URL}?action=incrementViews`, {
+-      method: 'POST',      
+-      redirect: 'follow',
+-      credentials: 'omit',
+-      headers: {
+-        'Content-Type': 'application/x-www-form-urlencoded',
+-      },
+-      body: new URLSearchParams({
+-        slug,
+-      }),
+-    });
+-    
+-    const data = await response.json();
+-    
+-    if (!data.success) {
+-      throw new Error(data.error || 'Error al incrementar views');
+-    }
+-    
+-    return data.views;
+-  } catch (error) {
+-    console.error('Error incrementViewsRemote:', error);
+-    return null;
+-  }
+-}
+\ No newline at end of file
++  const data = await request('/api/invitations', {
++    method: 'POST',
++    body: JSON.stringify({ action: 'incrementViews', slug }),
++  })
++  return data.views
++}
+diff --git a/vite.config.js b/vite.config.js
+index 402b73f..8d68580 100644
+--- a/vite.config.js
++++ b/vite.config.js
+@@ -1,11 +1,50 @@
+ import { defineConfig } from 'vite'
+ import react from '@vitejs/plugin-react'
++import dotenv from 'dotenv'
++import adminLogin from './api/admin-login.js'
++import adminLogout from './api/admin-logout.js'
++import adminProxy from './api/admin-proxy.js'
++import invitations from './api/invitations.js'
++
++// Las variables de las funciones serverless se cargan aquí solo para desarrollo local.
++dotenv.config({ path: '.env.local' })
++dotenv.config()
++
++const routes = [
++  { path: '/admin-login', method: 'POST', handler: adminLogin },
++  { path: '/admin-logout', method: 'POST', handler: adminLogout },
++  { path: '/admin-proxy', methods: ['GET', 'POST'], handler: adminProxy },
++  { path: '/invitations', methods: ['GET', 'POST'], handler: invitations },
++]
++
++function vercelApiDev() {
++  const middleware = (req, res, next) => {
++    const pathname = new URL(req.url, 'http://localhost').pathname
++    const route = routes.find((item) => item.path === pathname)
++    if (!route) return next()
++    if (route.method && req.method !== route.method) return next()
++    if (route.methods && !route.methods.includes(req.method)) return next()
++
++    Promise.resolve(route.handler(req, res)).catch((error) => {
++      res.statusCode = 500
++      res.setHeader('Content-Type', 'application/json')
++      res.end(JSON.stringify({ error: error.message }))
++    })
++  }
++
++  return {
++    name: 'vercel-api-dev',
++    configureServer(server) { server.middlewares.use('/api', middleware) },
++    configurePreviewServer(server) { server.middlewares.use('/api', middleware) },
++  }
++}
+ 
+ export default defineConfig({
+-  plugins: [react()],
++  plugins: [react(), vercelApiDev()],
+   server: {
+     host: '0.0.0.0',
+     port: 3000,
+-    open: true
+-  }
+-})
+\ No newline at end of file
++    open: false,
++    allowedHosts: true,
++  },
++})
+-- 
+2.47.3
+

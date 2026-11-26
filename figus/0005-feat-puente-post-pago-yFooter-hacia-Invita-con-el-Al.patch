@@ -1,0 +1,173 @@
+From 235307d7d813831906474994403811e6dc39ddc6 Mon Sep 17 00:00:00 2001
+From: Arena Agent <agent@arena.ai>
+Date: Thu, 26 Nov 2026 12:43:51 +0000
+Subject: [PATCH 5/6] feat: puente post-pago yFooter hacia Invita con el Alma
+ con isotipo SVG
+
+---
+ .env.example                                  |  3 +
+ src/components/brand/AlmaIsotipo.jsx          | 22 ++++++++
+ .../crossSell/AlmaCrossSellCard.jsx           | 55 +++++++++++++++++++
+ src/pages/CreatePage.jsx                      |  3 +
+ src/pages/HomePage.jsx                        | 15 +++++
+ 5 files changed, 98 insertions(+)
+ create mode 100644 src/components/brand/AlmaIsotipo.jsx
+ create mode 100644 src/components/crossSell/AlmaCrossSellCard.jsx
+
+diff --git a/.env.example b/.env.example
+index 73084df..2e6a2d1 100644
+--- a/.env.example
++++ b/.env.example
+@@ -5,3 +5,6 @@ SESSION_SECRET=otro-secreto-largo-y-aleatorio
+ APPS_SCRIPT_URL=https://script.google.com/macros/s/TU_ID/exec
+ API_BASE_URL=https://tu-api.vercel.app
+ API_TOKEN=mismo-token-que-la-api
++
++# URL pública de la línea boutique (safe para el bundle).
++VITE_ALMA_URL=https://invitastudio-vert.vercel.app
+diff --git a/src/components/brand/AlmaIsotipo.jsx b/src/components/brand/AlmaIsotipo.jsx
+new file mode 100644
+index 0000000..d0ba8fa
+--- /dev/null
++++ b/src/components/brand/AlmaIsotipo.jsx
+@@ -0,0 +1,22 @@
++// Isotipo editorial a medida: sobre con sello geométrico, trazo fino.
++export default function AlmaIsotipo({ size = 48, className = '' }) {
++  return (
++    <svg
++      width={size}
++      height={size}
++      viewBox="0 0 48 48"
++      fill="none"
++      xmlns="http://www.w3.org/2000/svg"
++      className={className}
++      role="img"
++      aria-label="Invita con el Alma"
++    >
++      <rect x="6.5" y="11.5" width="35" height="25" rx="2.2" stroke="currentColor" strokeWidth="1.1" />
++      <path d="M6.5 13.5 24 26l17.5-12.5" stroke="currentColor" strokeWidth="1.1" strokeLinejoin="round" />
++      <path d="M6.5 34.5 18.5 25M41.5 34.5 29.5 25" stroke="currentColor" strokeWidth="1.1" strokeLinejoin="round" />
++      <circle cx="24" cy="24" r="5.6" stroke="currentColor" strokeWidth="1.1" />
++      <path d="M24 20.6 26.8 24 24 27.4 21.2 24 24 20.6Z" stroke="currentColor" strokeWidth="1.1" strokeLinejoin="round" />
++      <path d="M24 11.5v2.2M24 34.5v2.2" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" />
++    </svg>
++  )
++}
+diff --git a/src/components/crossSell/AlmaCrossSellCard.jsx b/src/components/crossSell/AlmaCrossSellCard.jsx
+new file mode 100644
+index 0000000..d6422c8
+--- /dev/null
++++ b/src/components/crossSell/AlmaCrossSellCard.jsx
+@@ -0,0 +1,55 @@
++import AlmaIsotipo from '../brand/AlmaIsotipo.jsx'
++
++const ALMA_URL = import.meta.env.VITE_ALMA_URL || 'https://invitastudio-vert.vercel.app'
++
++export default function AlmaCrossSellCard() {
++  return (
++    <section className="mt-10 text-left" aria-labelledby="alma-cross-sell-title">
++      <div
++        className="relative overflow-hidden rounded-2xl px-6 py-7 sm:px-8"
++        style={{
++          background: 'linear-gradient(145deg, #fbf6ec 0%, #f2e9d8 55%, #eee2cb 100%)',
++          border: '1px solid rgba(176, 141, 74, 0.45)',
++          boxShadow: 'inset 0 1px 0 rgba(255,255,255,.8), 0 18px 40px rgba(0,0,0,.28)',
++          color: '#2b2118',
++        }}
++      >
++        <div
++          className="pointer-events-none absolute inset-0 opacity-[0.35]"
++          style={{
++            backgroundImage: 'repeating-linear-gradient(135deg, rgba(176,141,74,.09) 0 1px, transparent 1px 9px)',
++          }}
++        />
++        <div className="relative">
++          <AlmaIsotipo size={44} className="text-[#8a6b35]" />
++
++          <p
++            id="alma-cross-sell-title"
++            className="mt-5 text-[10px] font-semibold uppercase tracking-[0.24em] text-[#8a6b35]"
++          >
++            INVITA CON EL ALMA · DIVISIÓN EVENTOS SOCIALES
++          </p>
++
++          <h3 className="mt-3 font-serif text-2xl leading-tight text-[#2b2118] sm:text-[26px]">
++            ¿Próximamente un Bautismo, Comunión, XV o Boda en la familia?
++          </h3>
++
++          <p className="mt-3 text-[13px] leading-relaxed text-[#5b4b3c]">
++            Conocé nuestra línea de invitaciones digitales de autor: apertura de sobre interactiva en 3D,
++            música personalizada, confirmación de asistencia en tiempo real y gestión inteligente de mesas.
++          </p>
++
++          <a
++            href={ALMA_URL}
++            target="_blank"
++            rel="noopener noreferrer"
++            className="mt-6 inline-flex items-center gap-3 border-b border-[#8a6b35] pb-1 text-[13px] font-semibold tracking-wide text-[#6d5429] transition-colors hover:text-[#2b2118]"
++          >
++            Conocer Invita con el Alma
++            <span aria-hidden="true" className="text-base leading-none">→</span>
++          </a>
++        </div>
++      </div>
++    </section>
++  )
++}
+diff --git a/src/pages/CreatePage.jsx b/src/pages/CreatePage.jsx
+index 85e4972..a234c21 100644
+--- a/src/pages/CreatePage.jsx
++++ b/src/pages/CreatePage.jsx
+@@ -8,6 +8,7 @@ import Watermark from '../components/invitation/Watermark'
+ import { sendToGoogleForm } from '../services/googleForm'
+ import { teams } from '../data/teams'
+ import { whatsappLinks } from '../config/whatsapp'
++import AlmaCrossSellCard from '../components/crossSell/AlmaCrossSellCard.jsx'
+ 
+ 
+ export default function CreatePage() {
+@@ -447,6 +448,8 @@ export default function CreatePage() {
+                   </button>
+                 </p>
+               </div>
++
++              <AlmaCrossSellCard />
+             </motion.div>
+           )}
+         </AnimatePresence>
+diff --git a/src/pages/HomePage.jsx b/src/pages/HomePage.jsx
+index 0ca2877..2ebe862 100644
+--- a/src/pages/HomePage.jsx
++++ b/src/pages/HomePage.jsx
+@@ -4,6 +4,7 @@ import { motion, AnimatePresence } from 'framer-motion'
+ import { ArrowRight, Sparkles, Camera, Share2, Star, ChevronDown, MessageCircle, Clock, Shield, Zap, Heart, Trophy, X, Check } from 'lucide-react'
+ import { teams } from '../data/teams'
+ import { whatsappLinks } from '../config/whatsapp'
++import AlmaIsotipo from '../components/brand/AlmaIsotipo.jsx'
+ 
+ // Número de WhatsApp - CAMBIAR POR TU NÚMERO REAL
+ 
+@@ -579,6 +580,20 @@ export default function HomePage() {
+             Invitaciones digitales futboleras para cumpleañeros de todas las edades
+           </p>
+         </div>
++        <div className="mt-7 flex max-w-5xl mx-auto items-center justify-center gap-2.5 border-t border-white/5 pt-5 md:justify-start">
++          <AlmaIsotipo size={22} className="shrink-0 text-[#B08D4A]/70" />
++          <p className="text-[11px] text-white/25">
++            Bodas, XV, bautismos y eventos sociales:{' '}
++            <a
++              href={import.meta.env.VITE_ALMA_URL || 'https://invitastudio-vert.vercel.app'}
++              target="_blank"
++              rel="noopener noreferrer"
++              className="text-[#B08D4A]/80 underline decoration-[#B08D4A]/40 underline-offset-4 transition-colors hover:text-[#D7B56B]"
++            >
++              Invita con el Alma
++            </a>
++          </p>
++        </div>
+       </footer>
+     </div>
+   )
+-- 
+2.47.3
+
